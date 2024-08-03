@@ -1,5 +1,5 @@
 # Planet-Playground
-##Description
+## Description
 A frontend demo of planetary physics from Super Mario Galaxy.
 
 ## How to run
