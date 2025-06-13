@@ -24,7 +24,7 @@ export default function Scene() {
             {name:"right", keys: ["ArrowRight", "d", "D"]}
           ]}>
             <Canvas frameloop="always" camera={{ position: [0,0,5], fov: 45 }}>
-                <OrbitController characterRef={character}/>
+                <CameraController characterRef={character} platform={platform}/>
                 {/* Light */}
                 <ambientLight intensity={1} />
                 <directionalLight position={[-2, 1, 5]} />
@@ -49,28 +49,47 @@ export default function Scene() {
     );
 }
 
-function OrbitController(props) {
-  const { camera, gl } = useThree()
-  const ref = useRef()
-  const characterRef = props.characterRef
+function CameraController(props) {
+  const { camera } = useThree(); // Access the camera object
+  const characterRef = props.characterRef; // Reference to the player
+  const sphereRef = props.platform; // Reference to the sphere (ground)
 
-  useEffect(() => {
-    if (ref.current) {
-      console.log(ref.current)
-    }
-  }, [characterRef]) 
-  
-  
-  useFrame((state) => {
-    if (!ref.current || !characterRef.current) return;
+  useFrame(() => {
+    if (!characterRef.current || !sphereRef.current) return;
 
-    const position = characterRef.current.translation()
+    // Get the player's position
+    const playerPosition = characterRef.current.translation();
 
-    ref.current.target = new THREE.Vector3(position.x, position.y, position.z)
-  })
-  
-  return <OrbitControls ref={ref} target={[0, 2, -3]} />
+    // Get the sphere's position
+    const spherePosition = sphereRef.current.translation();
 
+    // Calculate the ground normal at the player's position
+    const groundNormal = new THREE.Vector3();
+    groundNormal.subVectors(playerPosition, spherePosition).normalize();
+
+    // Calculate the backward direction of the player
+    const backwardDirection = new THREE.Vector3(0, 0, 1); // Local backward direction
+    backwardDirection.applyQuaternion(characterRef.current.rotation()); // Transform to world space
+
+    // Combine ground normal and backward direction to position the camera
+    const cameraOffset = new THREE.Vector3();
+    cameraOffset.copy(groundNormal).multiplyScalar(3); // Offset above the player
+    cameraOffset.add(backwardDirection.multiplyScalar(3)); // Offset behind the player
+
+    // Set the camera position relative to the player
+    const targetPosition = new THREE.Vector3(
+      playerPosition.x + cameraOffset.x,
+      playerPosition.y + cameraOffset.y,
+      playerPosition.z + cameraOffset.z
+    );
+    camera.position.lerp(targetPosition, 0.1);
+
+    // Make the camera look at the player
+    camera.lookAt(new THREE.Vector3(playerPosition.x, playerPosition.y, playerPosition.z));
+    camera.up.set(groundNormal.x, groundNormal.y, groundNormal.z); // Set camera up vector to ground normal
+  });
+
+  return null; // No visual component needed
 }
 
 function Rig(props) {
@@ -127,17 +146,28 @@ function Sphere(props) {
 
     // check if linear velocity is the same as direction
 
+    const playerRadius = 0.1;
+    const sphereRadius = 0.5;
+    const isOnGround = Math.abs(distance.length() - sphereRadius) <= playerRadius;
+    if (!isOnGround) {
 
-    const G = 0.000001 // Gravitational constant (adjust if needed)
-    const playerMass = 10
+    const G = 0.00000001 // Gravitational constant (adjust if needed)
+    const playerMass = 100
     const sphereMass = 1000
 
     const force = direction.multiplyScalar(Math.max(Math.min(G * playerMass * sphereMass / Math.pow(distance.length(), 2), 0.1),-0.1)); // Force equation
     playerRef.current.setAngvel({ x: 0, y: 0, z: 0 }); // Reset angular velocity
     playerRef.current.setLinvel({ x: 0, y: 0, z: 0 }); // Reset linear velocity
 
-    force.normalize().multiplyScalar(1).clampScalar(-1, 1)
+    
+
+    force.normalize().multiplyScalar(1).clampScalar(-1, 1); // Normalize and clamp force to a maximum value
     playerRef.current.setLinvel({x:force.x, y: force.y, z: force.z}); // Apply force to player
+    }
+    else {
+      playerRef.current.setLinvel({ x: 0, y: 0, z: 0 }); // Reset linear velocity when on ground
+      playerRef.current.setAngvel({ x: 0, y: 0, z: 0 }); // Reset angular velocity when on ground
+    }
 
     step(delta)
   })
@@ -155,74 +185,65 @@ function Sphere(props) {
 
 
 function Player(props) {
-  const ref = props.character
-  const [, get] = useKeyboardControls()
-  const raycaster = new THREE.Raycaster()
-  
+  const ref = props.character;
+  const sphereRef = props.platform; // Reference to the sphere (ground)
+  const [, get] = useKeyboardControls();
+
   const speed = 1;
   const turnSpeed = 1.2;
 
   const direction = new THREE.Vector3(0, 0, 0);
   const frontVector = new THREE.Vector3(0, 0, 0);
   const sideVector = new THREE.Vector3(0, 0, 0);
-  const upVector = new THREE.Vector3(0, 0, 0);
-
-  /*
-  useEffect(()=> {
-    invalidate()
-  }, [get()])
-
-
-
-  */
+  const groundNormal = new THREE.Vector3(0, 1, 0); // Default normal pointing up
 
   useFrame((state, delta) => {
-    
-    if (!ref.current) return
+    if (!ref.current || !sphereRef.current) return;
 
-    const { forward, backward, left, right } = get()
-    const velocity = ref.current.linvel()
-    const position = ref.current.translation()
-
-    const rotation = ref.current.rotation(); // Access rotation only if api exists
-    
-
-    // // Update the camera position
     // state.camera.position.x = position.x
     // state.camera.position.y = position.y + 2
     // state.camera.position.z = position.z + 5
- 
-    // state.camera.lookAt(new THREE.Vector3(position.x, position.y-1, position.z))
 
+    const { forward, backward, left, right } = get();
+    const velocity = ref.current.linvel();
+    const position = ref.current.translation();
+
+    // Calculate the normal of the sphere at the player's position
+    const spherePosition = sphereRef.current.translation();
+    groundNormal.subVectors(position, spherePosition).normalize(); // Normal vector from sphere center to player
+    
+
+    if (left || right) {
+      const angularVelocity = groundNormal.clone().multiplyScalar(turnSpeed * (left - right));
+      ref.current.setAngvel({
+        x: angularVelocity.x,
+        y: angularVelocity.y,
+        z: angularVelocity.z,
+      });
+    }
+
+    // Handle forward/backward movement
     frontVector.set(0, 0, -1);
     frontVector.applyQuaternion(ref.current.rotation());
-
-    sideVector.set(left - right, 0, 0);
 
     direction.subVectors(frontVector, sideVector).normalize().multiplyScalar(speed).clampScalar(-speed, speed);
 
     if (forward) {
-      ref.current.setLinvel({ x: direction.x, y: direction.y, z: direction.z })
+      ref.current.setLinvel({ x: direction.x, y: direction.y, z: direction.z });
     }
     if (backward) {
-      ref.current.setLinvel({ x: -direction.x, y: -direction.y, z: -direction.z })
+      ref.current.setLinvel({ x: -direction.x, y: -direction.y, z: -direction.z });
     }
-    if (left || right) {
-      ref.current.setAngvel({ x: 0, y: (left-right) * turnSpeed, z: 0 })
-      //ref.current.setLinvel({ x: direction.x, y: direction.y, z: direction.z })
-    }
-
-    
   });
-  
+
   return (
     <RigidBody ref={ref} colliders="cuboid" position={[0, 2, -3]} type="dynamic" mass={10}>
       <mesh ref={ref}>
-          <boxGeometry args={props.size} />
-          <meshStandardMaterial color={props.color}/>
+        <boxGeometry args={props.size} />
+        <meshStandardMaterial color={props.color} />
       </mesh>
     </RigidBody>
-  )
+  );
 }
 
 // Utilize the normals to always make the player stand on the object. try to utilize for directional inputs as well
